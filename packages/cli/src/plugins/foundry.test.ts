@@ -98,6 +98,88 @@ test('contracts', () => {
     `)
 })
 
+test('contracts with multiple addresses for same ABI', () => {
+  expect(
+    foundry({
+      project: resolve(__dirname, '__fixtures__/foundry/'),
+      exclude: ['Counter.sol/**'],
+      deployments: {
+        Foo: {
+          Token1: '0x1234567890123456789012345678901234567890',
+          Token2: '0x2345678901234567890123456789012345678901',
+        },
+      },
+    }).contracts?.(),
+  ).resolves.toMatchInlineSnapshot(`
+      [
+        {
+          "abi": [
+            {
+              "inputs": [],
+              "name": "bar",
+              "outputs": [
+                {
+                  "internalType": "string",
+                  "name": "",
+                  "type": "string",
+                },
+              ],
+              "stateMutability": "view",
+              "type": "function",
+            },
+            {
+              "inputs": [
+                {
+                  "internalType": "string",
+                  "name": "baz",
+                  "type": "string",
+                },
+              ],
+              "name": "setFoo",
+              "outputs": [],
+              "stateMutability": "nonpayable",
+              "type": "function",
+            },
+          ],
+          "address": "0x1234567890123456789012345678901234567890",
+          "name": "Foo_Token1",
+        },
+        {
+          "abi": [
+            {
+              "inputs": [],
+              "name": "bar",
+              "outputs": [
+                {
+                  "internalType": "string",
+                  "name": "",
+                  "type": "string",
+                },
+              ],
+              "stateMutability": "view",
+              "type": "function",
+            },
+            {
+              "inputs": [
+                {
+                  "internalType": "string",
+                  "name": "baz",
+                  "type": "string",
+                },
+              ],
+              "name": "setFoo",
+              "outputs": [],
+              "stateMutability": "nonpayable",
+              "type": "function",
+            },
+          ],
+          "address": "0x2345678901234567890123456789012345678901",
+          "name": "Foo_Token2",
+        },
+      ]
+    `)
+})
+
 test('contracts without project', async () => {
   const dir = resolve(__dirname, '__fixtures__/foundry/')
   const spy = vi.spyOn(process, 'cwd')
@@ -150,4 +232,72 @@ test('contracts without project', async () => {
         },
       ]
     `)
+})
+
+test('watch handlers with multiple address deployments', async () => {
+  const dir = resolve(__dirname, '__fixtures__/foundry/')
+  const plugin = foundry({
+    project: dir,
+    deployments: {
+      Foo: {
+        Token1: '0x1234567890123456789012345678901234567890',
+        Token2: '0x2345678901234567890123456789012345678901',
+      },
+    },
+  })
+
+  const path = resolve(dir, 'out/Foo.sol/Foo.json')
+
+  if (
+    !plugin.watch?.onAdd ||
+    !plugin.watch?.onChange ||
+    !plugin.watch?.onRemove
+  ) {
+    throw new Error('Watch handlers not properly configured')
+  }
+
+  // Test onAdd handler
+  const addResult = await plugin.watch.onAdd(path)
+  expect(addResult).toMatchInlineSnapshot(`
+    {
+      "abi": [
+        {
+          "inputs": [],
+          "name": "bar",
+          "outputs": [
+            {
+              "internalType": "string",
+              "name": "",
+              "type": "string",
+            },
+          ],
+          "stateMutability": "view",
+          "type": "function",
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "string",
+              "name": "baz",
+              "type": "string",
+            },
+          ],
+          "name": "setFoo",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function",
+        },
+      ],
+      "address": "0x1234567890123456789012345678901234567890",
+      "name": "Foo_Token1",
+    }
+  `)
+
+  // Test onChange handler
+  const changeResult = await plugin.watch.onChange(path)
+  expect(changeResult).toEqual(addResult)
+
+  // Test onRemove handler
+  const removeResult = await plugin.watch.onRemove(path)
+  expect(removeResult).toBe('Foo')
 })

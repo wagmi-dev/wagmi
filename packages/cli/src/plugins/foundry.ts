@@ -52,8 +52,17 @@ export type FoundryConfig = {
    * @default foundry.config#out | 'out'
    */
   artifacts?: string | undefined
-  /** Mapping of addresses to attach to artifacts. */
-  deployments?: { [key: string]: ContractConfig['address'] } | undefined
+  /**
+   * Mapping of addresses to attach to artifacts.
+   * Can be either a single address or a chain-id mapped address
+   */
+  deployments?:
+    | {
+        [contractName: string]:
+          | ContractConfig['address']
+          | Record<string, ContractConfig['address']>
+      }
+    | undefined
   /** Artifact files to exclude. */
   exclude?: string[] | undefined
   /** [Forge](https://book.getfoundry.sh/forge) configuration */
@@ -124,13 +133,51 @@ export function foundry(config: FoundryConfig = {}): FoundryResult {
     return `${usePrefix ? namePrefix : ''}${filename.replace(extension, '')}`
   }
 
-  async function getContract(artifactPath: string) {
+  async function getContract(
+    artifactPath: string,
+  ): Promise<ContractConfig | ContractConfig[]> {
     const artifact = await fs.readJSON(artifactPath)
+    const baseName = getContractName(artifactPath, false)
+    const deployment = deployments[baseName]
+
+    // Check if ABI exists and is an array
+    if (!artifact.abi || !Array.isArray(artifact.abi)) {
+      return {
+        abi: [],
+        address: deployment as ContractConfig['address'],
+        name: getContractName(artifactPath),
+      }
+    }
+
+    // Sort ABI to ensure consistent order
+    const sortedAbi = [...artifact.abi].sort((a, b) => {
+      if (a.type !== b.type) return a.type.localeCompare(b.type)
+      if ('name' in a && 'name' in b) return a.name.localeCompare(b.name)
+      return 0
+    })
+
+    // Handle case where deployment is a record of multiple addresses
+    if (
+      deployment &&
+      typeof deployment === 'object' &&
+      !('address' in deployment)
+    ) {
+      // Create separate contracts for each deployment address
+      const contracts: ContractConfig[] = []
+      for (const [key, address] of Object.entries(deployment)) {
+        contracts.push({
+          abi: sortedAbi,
+          address: address as ContractConfig['address'],
+          name: `${baseName}_${key}`,
+        })
+      }
+      return contracts
+    }
+
+    // Handle single address case
     return {
-      abi: artifact.abi,
-      address: (deployments as Record<string, ContractConfig['address']>)[
-        getContractName(artifactPath, false)
-      ],
+      abi: sortedAbi,
+      address: deployment as ContractConfig['address'],
       name: getContractName(artifactPath),
     }
   }
@@ -179,9 +226,18 @@ export function foundry(config: FoundryConfig = {}): FoundryResult {
       const artifactPaths = await getArtifactPaths(artifactsDirectory)
       const contracts = []
       for (const artifactPath of artifactPaths) {
-        const contract = await getContract(artifactPath)
-        if (!contract.abi?.length) continue
-        contracts.push(contract)
+        const result = await getContract(artifactPath)
+        if (Array.isArray(result)) {
+          // Handle multiple contracts case
+          for (const contract of result) {
+            if (!contract.abi?.length) continue
+            contracts.push(contract)
+          }
+        } else {
+          // Handle single contract case
+          if (!result.abi?.length) continue
+          contracts.push(result)
+        }
       }
       return contracts
     },
@@ -231,13 +287,15 @@ export function foundry(config: FoundryConfig = {}): FoundryResult {
         ...include.map((x) => `${artifactsDirectory}/**/${x}`),
         ...exclude.map((x) => `!${artifactsDirectory}/**/${x}`),
       ],
-      async onAdd(path) {
-        return getContract(path)
+      async onAdd(path): Promise<ContractConfig | undefined> {
+        const result = await getContract(path)
+        return Array.isArray(result) ? result[0] : result
       },
-      async onChange(path) {
-        return getContract(path)
+      async onChange(path): Promise<ContractConfig | undefined> {
+        const result = await getContract(path)
+        return Array.isArray(result) ? result[0] : result
       },
-      async onRemove(path) {
+      async onRemove(path): Promise<string | undefined> {
         return getContractName(path)
       },
     },
