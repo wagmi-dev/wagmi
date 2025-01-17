@@ -8,6 +8,8 @@ const connectorsPackageName = 'wagmi/connectors'
 
 Connector for [MetaMask SDK](https://github.com/MetaMask/metamask-sdk).
 
+The MetaMask Connector helps you manage wallet connections in your React applications. It supports essential features like connecting, disconnecting, and handling multiple chains, while maintaining compatibility with browser and mobile environments. You can choose between the MetaMask Connector and the Injected Connector—but keep in mind that using the Injected Connector limits your app to the MetaMask browser extension only.
+
 ## Import
 
 ```ts-vue
@@ -41,8 +43,6 @@ Check out the [MetaMask SDK docs](https://docs.metamask.io/wallet/connect/3rd-pa
 
 ### dappMetadata
 
-`DappMetadata | undefined`
-
 Metadata is used to fill details for the UX on confirmation screens in MetaMask, including the following fields:
 
 - `name`: `string` - The name of the dapp.
@@ -62,8 +62,6 @@ const connector = metaMask({
 ```
 
 ### logging
-
-`SDKLoggingOptions | undefined`
 
 Enables SDK-side logging to provide visibility into:
 
@@ -92,8 +90,6 @@ const connector = metaMask({
 
 ### headless
 
-`boolean | undefined`
-
 - Enables headless mode, disabling MetaMask's built-in modal.
 - Allows developers to create their own modal, such as for displaying a QR code.
 
@@ -120,3 +116,7 @@ EIP-6963 defines a standard way for dapps to interact with multiple wallets simu
 When MetaMask SDK detects an EIP-6963-compliant provider (such as MetaMask itself), the connector will automatically replace the default injected provider (like `window.ethereum`) with the one provided by MetaMask SDK.
 
 See the [`rdns` property](https://wagmi.sh/dev/creating-connectors#properties) for more information.
+
+## MetaMask SDK Docs
+
+Check out the [MetaMask SDK docs](https://docs.metamask.io/wallet/connect/metamask-sdk/javascript/react/) for more information.
