@@ -11,7 +11,6 @@ import {
   createConnector,
   extractRpcUrls,
 } from '@wagmi/core'
-import type { linea, lineaSepolia, mainnet, sepolia } from '@wagmi/core/chains'
 import type {
   Compute,
   ExactPartial,
@@ -24,6 +23,7 @@ import {
   type Address,
   type Hex,
   type ProviderConnectInfo,
+  type ProviderRpcError,
   ResourceUnavailableRpcError,
   type RpcError,
   SwitchChainError,
@@ -315,57 +315,11 @@ export function metaMask(parameters: MetaMaskParameters = {}) {
       const chain = config.chains.find((x) => x.id === chainId)
       if (!chain) throw new SwitchChainError(new ChainNotConfiguredError())
 
-      // Default chains cannot be added or removed
-      const isDefaultChain = (() => {
-        const metaMaskDefaultChains = [
-          1, 11_155_111, 59_144, 59_141,
-        ] satisfies [
-          typeof mainnet.id,
-          typeof sepolia.id,
-          typeof linea.id,
-          typeof lineaSepolia.id,
-        ]
-        return metaMaskDefaultChains.find((x) => x === chainId)
-      })()
-
-      // Avoid back and forth on mobile by using `'wallet_addEthereumChain'` for non-default chains
       try {
-        if (!isDefaultChain)
-          await provider.request({
-            method: 'wallet_addEthereumChain',
-            params: [
-              {
-                blockExplorerUrls: (() => {
-                  const { default: blockExplorer, ...blockExplorers } =
-                    chain.blockExplorers ?? {}
-                  if (addEthereumChainParameter?.blockExplorerUrls)
-                    return addEthereumChainParameter.blockExplorerUrls
-                  if (blockExplorer)
-                    return [
-                      blockExplorer.url,
-                      ...Object.values(blockExplorers).map((x) => x.url),
-                    ]
-                  return
-                })(),
-                chainId: numberToHex(chainId),
-                chainName: addEthereumChainParameter?.chainName ?? chain.name,
-                iconUrls: addEthereumChainParameter?.iconUrls,
-                nativeCurrency:
-                  addEthereumChainParameter?.nativeCurrency ??
-                  chain.nativeCurrency,
-                rpcUrls: (() => {
-                  if (addEthereumChainParameter?.rpcUrls?.length)
-                    return addEthereumChainParameter.rpcUrls
-                  return [chain.rpcUrls.default?.http[0] ?? '']
-                })(),
-              } satisfies AddEthereumChainParameter,
-            ],
-          })
-        else
-          await provider.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: numberToHex(chainId) }],
-          })
+        await provider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: numberToHex(chainId) }],
+        })
 
         // During `'wallet_switchEthereumChain'`, MetaMask makes a `'net_version'` RPC call to the target chain.
         // If this request fails, MetaMask does not emit the `'chainChanged'` event, but will still switch the chain.
@@ -375,46 +329,100 @@ export function metaMask(parameters: MetaMaskParameters = {}) {
         await waitForChainIdToSync()
         await sendAndWaitForChangeEvent(chainId)
 
-        async function waitForChainIdToSync() {
-          // On mobile, there is a race condition between the result of `'wallet_addEthereumChain'` and `'eth_chainId'`.
-          // To avoid this, we wait for `'eth_chainId'` to return the expected chain ID with a retry loop.
-          await withRetry(
-            async () => {
-              const value = hexToNumber(
-                // `'eth_chainId'` is cached by the MetaMask SDK side to avoid unnecessary deeplinks
-                (await provider.request({ method: 'eth_chainId' })) as Hex,
-              )
-              // `value` doesn't match expected `chainId`, throw to trigger retry
-              if (value !== chainId)
-                throw new Error('User rejected switch after adding network.')
-              return value
-            },
-            {
-              delay: 50,
-              retryCount: 20, // android device encryption is slower
-            },
-          )
-        }
-
-        async function sendAndWaitForChangeEvent(chainId: number) {
-          await new Promise<void>((resolve) => {
-            const listener = ((data) => {
-              if ('chainId' in data && data.chainId === chainId) {
-                config.emitter.off('change', listener)
-                resolve()
-              }
-            }) satisfies Parameters<typeof config.emitter.on>[1]
-            config.emitter.on('change', listener)
-            config.emitter.emit('change', { chainId })
-          })
-        }
-
         return chain
       } catch (err) {
         const error = err as RpcError
+
         if (error.code === UserRejectedRequestError.code)
           throw new UserRejectedRequestError(error)
+
+        // Indicates chain is not added to provider
+        if (
+          error.code === 4902 ||
+          // Unwrapping for MetaMask Mobile
+          // https://github.com/MetaMask/metamask-mobile/issues/2944#issuecomment-976988719
+          (error as ProviderRpcError<{ originalError?: { code: number } }>)
+            ?.data?.originalError?.code === 4902
+        ) {
+          try {
+            await provider.request({
+              method: 'wallet_addEthereumChain',
+              params: [
+                {
+                  blockExplorerUrls: (() => {
+                    const { default: blockExplorer, ...blockExplorers } =
+                      chain.blockExplorers ?? {}
+                    if (addEthereumChainParameter?.blockExplorerUrls)
+                      return addEthereumChainParameter.blockExplorerUrls
+                    if (blockExplorer)
+                      return [
+                        blockExplorer.url,
+                        ...Object.values(blockExplorers).map((x) => x.url),
+                      ]
+                    return
+                  })(),
+                  chainId: numberToHex(chainId),
+                  chainName: addEthereumChainParameter?.chainName ?? chain.name,
+                  iconUrls: addEthereumChainParameter?.iconUrls,
+                  nativeCurrency:
+                    addEthereumChainParameter?.nativeCurrency ??
+                    chain.nativeCurrency,
+                  rpcUrls: (() => {
+                    if (addEthereumChainParameter?.rpcUrls?.length)
+                      return addEthereumChainParameter.rpcUrls
+                    return [chain.rpcUrls.default?.http[0] ?? '']
+                  })(),
+                } satisfies AddEthereumChainParameter,
+              ],
+            })
+
+            await waitForChainIdToSync()
+            await sendAndWaitForChangeEvent(chainId)
+
+            return chain
+          } catch (err) {
+            const error = err as RpcError
+            if (error.code === UserRejectedRequestError.code)
+              throw new UserRejectedRequestError(error)
+            throw new SwitchChainError(error)
+          }
+        }
+
         throw new SwitchChainError(error)
+      }
+
+      async function waitForChainIdToSync() {
+        // On mobile, there is a race condition between the result of `'wallet_addEthereumChain'` and `'eth_chainId'`.
+        // To avoid this, we wait for `'eth_chainId'` to return the expected chain ID with a retry loop.
+        await withRetry(
+          async () => {
+            const value = hexToNumber(
+              // `'eth_chainId'` is cached by the MetaMask SDK side to avoid unnecessary deeplinks
+              (await provider.request({ method: 'eth_chainId' })) as Hex,
+            )
+            // `value` doesn't match expected `chainId`, throw to trigger retry
+            if (value !== chainId)
+              throw new Error('User rejected switch after adding network.')
+            return value
+          },
+          {
+            delay: 50,
+            retryCount: 20, // android device encryption is slower
+          },
+        )
+      }
+
+      async function sendAndWaitForChangeEvent(chainId: number) {
+        await new Promise<void>((resolve) => {
+          const listener = ((data) => {
+            if ('chainId' in data && data.chainId === chainId) {
+              config.emitter.off('change', listener)
+              resolve()
+            }
+          }) satisfies Parameters<typeof config.emitter.on>[1]
+          config.emitter.on('change', listener)
+          config.emitter.emit('change', { chainId })
+        })
       }
     },
     async onAccountsChanged(accounts) {
